@@ -25,6 +25,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/prometheus/blackbox_exporter/config"
+	"net/http"
 )
 
 // validRRs checks a slice of RRs received from the server against a DNSRRValidator.
@@ -89,7 +90,7 @@ func validRcode(rcode int, valid []string, logger log.Logger) bool {
 	return false
 }
 
-func ProbeDNS(ctx context.Context, target string, module config.Module, registry *prometheus.Registry, logger log.Logger) bool {
+func ProbeDNS(r *http.Request,ctx context.Context, target string, module config.Module, registry *prometheus.Registry, logger log.Logger) bool {
 	var dialProtocol string
 	probeDNSAnswerRRSGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "probe_dns_answer_rrs",

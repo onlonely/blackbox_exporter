@@ -29,6 +29,7 @@ import (
 	"golang.org/x/net/ipv6"
 
 	"github.com/prometheus/blackbox_exporter/config"
+	"net/http"
 )
 
 var (
@@ -43,7 +44,7 @@ func getICMPSequence() uint16 {
 	return icmpSequence
 }
 
-func ProbeICMP(ctx context.Context, target string, module config.Module, registry *prometheus.Registry, logger log.Logger) (success bool) {
+func ProbeICMP(r *http.Request,ctx context.Context, target string, module config.Module, registry *prometheus.Registry, logger log.Logger) (success bool) {
 	var (
 		socket      net.PacketConn
 		requestType icmp.Type

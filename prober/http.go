@@ -104,6 +104,7 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	t.current = trace
 	t.traces = append(t.traces, trace)
+	defer func() { trace.end = time.Now() }()
 	return t.Transport.RoundTrip(req)
 }
 
@@ -131,7 +132,7 @@ func (t *transport) GotFirstResponseByte() {
 	t.current.responseStart = time.Now()
 }
 
-func ProbeHTTP(ctx context.Context, target string, module config.Module, registry *prometheus.Registry, logger log.Logger) (success bool) {
+func ProbeHTTP(r *http.Request, ctx context.Context, target string, module config.Module, registry *prometheus.Registry, logger log.Logger) (success bool) {
 	var redirects int
 	var (
 		durationGaugeVec = prometheus.NewGaugeVec(prometheus.GaugeOpts{
@@ -187,11 +188,11 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 	registry.MustRegister(probeFailedDueToRegex)
 
 	httpConfig := module.HTTP
-
+	//判断探测目标协议
 	if !strings.HasPrefix(target, "http://") && !strings.HasPrefix(target, "https://") {
 		target = "http://" + target
 	}
-
+	// 转换为url对象
 	targetURL, err := url.Parse(target)
 	if err != nil {
 		level.Error(logger).Log("msg", "Could not parse target URL", "err", err)
@@ -257,11 +258,22 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 
 	var body io.Reader
 
-	// If a body is configured, add it to the request.
-	if httpConfig.Body != "" {
-		body = strings.NewReader(httpConfig.Body)
+	// 如果url传递了body就从url里面取
+	if httpConfig.Method == "POST" {
+		querybody := r.URL.Query().Get("target_body")
+		// post方式访问则使用body传递body
+		if r.Method=="POST" {
+		}
+		if querybody != "" {
+			level.Info(logger).Log("msg", "url param", "target_body", querybody)
+			body = strings.NewReader(querybody)
+		} else {
+			// If a body is configured, add it to the request.从配置取body配置
+			if httpConfig.Body != "" {
+				body = strings.NewReader(httpConfig.Body)
+			}
+		}
 	}
-
 	request, err := http.NewRequest(httpConfig.Method, targetURL.String(), body)
 	request.Host = origHost
 	request = request.WithContext(ctx)
@@ -276,6 +288,25 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 			continue
 		}
 		request.Header.Set(key, value)
+	}
+
+	// 如果有请求头参数
+	queryhost := r.URL.Query().Get("target_host")
+	if queryhost != "" {
+		level.Info(logger).Log("msg", "url param", "target_host", queryhost)
+		request.Host = queryhost
+	}
+	// 如果有请求头参数
+	querycontenttype := r.URL.Query().Get("target_contenttype")
+	if querycontenttype != "" {
+		level.Info(logger).Log("msg", "url param", "target_contenttype", querycontenttype)
+		request.Header.Set("Content-Type", querycontenttype)
+	}
+	// 如果有请求头参数
+	queryuseragent := r.URL.Query().Get("target_useragent")
+	if queryuseragent != "" {
+		level.Info(logger).Log("msg", "url param", "target_queryuseragent", queryuseragent)
+		request.Header.Set("User-Agent", queryuseragent)
 	}
 
 	level.Info(logger).Log("msg", "Making HTTP request", "url", request.URL.String(), "host", request.Host)
@@ -295,8 +326,10 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 	if err != nil && resp == nil {
 		level.Error(logger).Log("msg", "Error for HTTP request", "err", err)
 	} else {
-		requestErrored := (err != nil)
-
+		defer func() {
+			io.Copy(ioutil.Discard, resp.Body)
+			resp.Body.Close()
+		}()
 		level.Info(logger).Log("msg", "Received HTTP response", "status_code", resp.StatusCode)
 		if len(httpConfig.ValidStatusCodes) != 0 {
 			for _, code := range httpConfig.ValidStatusCodes {
@@ -323,19 +356,6 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 				probeFailedDueToRegex.Set(1)
 			}
 		}
-
-		if resp != nil && !requestErrored {
-			_, err = io.Copy(ioutil.Discard, resp.Body)
-			if err != nil {
-				level.Info(logger).Log("msg", "Failed to read HTTP response body", "err", err)
-				success = false
-			}
-
-			resp.Body.Close()
-		}
-
-		// At this point body is fully read and we can write end time.
-		tt.current.end = time.Now()
 
 		var httpVersionNumber float64
 		httpVersionNumber, err = strconv.ParseFloat(strings.TrimPrefix(resp.Proto, "HTTP/"), 64)
@@ -395,12 +415,6 @@ func ProbeHTTP(ctx context.Context, target string, module config.Module, registr
 			continue
 		}
 		durationGaugeVec.WithLabelValues("processing").Add(trace.responseStart.Sub(trace.gotConn).Seconds())
-
-		// Continue here if we never read the full response from the server.
-		// Usually this means that request either failed or was redirected.
-		if trace.end.IsZero() {
-			continue
-		}
 		durationGaugeVec.WithLabelValues("transfer").Add(trace.end.Sub(trace.responseStart).Seconds())
 	}
 

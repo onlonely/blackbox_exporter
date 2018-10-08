@@ -59,8 +59,9 @@ var (
 		"dns":  prober.ProbeDNS,
 	}
 )
-
+// 探测主方法
 func probeHandler(w http.ResponseWriter, r *http.Request, c *config.Config, logger log.Logger, rh *resultHistory) {
+	//探测模块,从url参数中取
 	moduleName := r.URL.Query().Get("module")
 	if moduleName == "" {
 		moduleName = "http_2xx"
@@ -71,7 +72,7 @@ func probeHandler(w http.ResponseWriter, r *http.Request, c *config.Config, logg
 		return
 	}
 
-	// If a timeout is configured via the Prometheus header, add it to the request.
+	// If a timeout is configured via the Prometheus header, add it to the request.请求头设置超时时间情况,单位秒
 	var timeoutSeconds float64
 	if v := r.Header.Get("X-Prometheus-Scrape-Timeout-Seconds"); v != "" {
 		var err error
@@ -84,7 +85,7 @@ func probeHandler(w http.ResponseWriter, r *http.Request, c *config.Config, logg
 	if timeoutSeconds == 0 {
 		timeoutSeconds = 10
 	}
-
+	//以配置文件中的超时时间为准
 	if module.Timeout.Seconds() < timeoutSeconds && module.Timeout.Seconds() > 0 {
 		timeoutSeconds = module.Timeout.Seconds()
 	}
@@ -92,15 +93,17 @@ func probeHandler(w http.ResponseWriter, r *http.Request, c *config.Config, logg
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds*float64(time.Second)))
 	defer cancel()
 	r = r.WithContext(ctx)
-
+	//指标,成功与否
 	probeSuccessGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "probe_success",
 		Help: "Displays whether or not the probe was a success",
 	})
+	//指标,花费时间
 	probeDurationGauge := prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "probe_duration_seconds",
 		Help: "Returns how long the probe took to complete in seconds",
 	})
+	//探测目标,从url参数中取
 	params := r.URL.Query()
 	target := params.Get("target")
 	if target == "" {
@@ -121,9 +124,9 @@ func probeHandler(w http.ResponseWriter, r *http.Request, c *config.Config, logg
 	registry := prometheus.NewRegistry()
 	registry.MustRegister(probeSuccessGauge)
 	registry.MustRegister(probeDurationGauge)
-	success := prober(ctx, target, module, registry, sl)
+	success := prober(r, ctx, target, module, registry, sl) // 执行探测
 	duration := time.Since(start).Seconds()
-	probeDurationGauge.Set(duration)
+	probeDurationGauge.Set(duration) // 记录时间
 	if success {
 		probeSuccessGauge.Set(1)
 		level.Info(sl).Log("msg", "Probe succeeded", "duration_seconds", duration)
@@ -133,7 +136,7 @@ func probeHandler(w http.ResponseWriter, r *http.Request, c *config.Config, logg
 
 	debugOutput := DebugOutput(&module, &sl.buffer, registry)
 	rh.Add(moduleName, target, debugOutput, success)
-
+	// debug参数
 	if r.URL.Query().Get("debug") == "true" {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write([]byte(debugOutput))
